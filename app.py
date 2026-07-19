@@ -106,29 +106,32 @@ with tab3:
         save_to_sheet("production_logs", get_df("production_logs").drop(idx_l))
         st.rerun()
 
-# 4. الداشبورد
+# 4. الداشبورد المقارن
 with tab4:
-    st.header("Tableau de Bord")
+    st.header("Tableau de Bord Comparatif")
     df_logs = get_df("production_logs")
     df_plan = get_df("monthly_plan")
     
-    if not df_logs.empty and 'ref' in df_logs.columns:
-        ref_search = st.multiselect("Filtrer par Ref", df_logs['ref'].unique(), key="dash_search")
-        if ref_search:
-            df_logs = df_logs[df_logs['ref'].isin(ref_search)]
-            df_plan = df_plan[df_plan['ref'].isin(ref_search)]
-        
-        df_logs['qty'] = pd.to_numeric(df_logs['qty'])
-        df_plan['target'] = pd.to_numeric(df_plan['target'])
-        
-        total_prod = df_logs['qty'].sum()
-        total_target = df_plan['target'].sum() if not df_plan.empty else 0
-        completion = (total_prod / total_target * 100) if total_target > 0 else 0
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Production Totale", total_prod)
-        c2.metric("Objectif Total", total_target)
-        c3.metric("Taux d'accomplissement", f"{completion:.1f}%")
-        st.plotly_chart(px.bar(df_logs, x='ref', y='qty', title="Production par Ref"))
-    else:
-        st.warning("Aucune donnée disponible pour le dashboard.")
+    if not df_logs.empty: df_logs['qty'] = pd.to_numeric(df_logs['qty'])
+    if not df_plan.empty: df_plan['target'] = pd.to_numeric(df_plan['target'])
+
+    prod_grouped = df_logs.groupby('ref')['qty'].sum().reset_index()
+    plan_grouped = df_plan.groupby('ref')['target'].sum().reset_index()
+    
+    df_compare = pd.merge(plan_grouped, prod_grouped, on='ref', how='outer').fillna(0)
+    df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'] * 100).replace([float('inf'), -float('inf')], 0).round(1)
+
+    ref_search = st.multiselect("Filtrer par Ref", df_compare['ref'].unique(), key="dash_search")
+    if ref_search:
+        df_compare = df_compare[df_compare['ref'].isin(ref_search)]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Objectif Total", int(df_compare['target'].sum()))
+    c2.metric("Production Totale", int(df_compare['qty'].sum()))
+    total_perc = (df_compare['qty'].sum() / df_compare['target'].sum() * 100) if df_compare['target'].sum() > 0 else 0
+    c3.metric("Performance Globale", f"{total_perc:.1f}%")
+
+    st.divider()
+    st.subheader("Détail par Produit")
+    st.dataframe(df_compare.style.background_gradient(subset=['Taux (%)'], cmap='RdYlGn'), use_container_width=True)
+    st.plotly_chart(px.bar(df_compare, x='ref', y=['target', 'qty'], barmode='group', title="Comparaison Target vs Réel"))
