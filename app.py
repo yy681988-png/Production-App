@@ -9,7 +9,6 @@ import google.generativeai as genai
 
 # --- إعداد الاتصال ---
 def get_client():
-    # هذا السطر يقرأ البيانات من الخزنة التي أعددتها في Secrets
     creds_dict = st.secrets["gcp_service_account"]
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -84,12 +83,18 @@ with tab3:
         st.rerun()
     st.dataframe(get_df("production_logs"))
 
-# 4. الداشبورد + تحليل AI
+# 4. الداشبورد المصحح (لحل خطأ ArrowTypeError)
 with tab4:
     st.header("Tableau de Bord Comparatif")
     df_logs = get_df("production_logs")
     df_plan = get_df("monthly_plan")
     
+    # تحويل البيانات إلى أرقام بشكل صريح لمنع الأخطاء
+    if not df_logs.empty:
+        df_logs['qty'] = pd.to_numeric(df_logs['qty'], errors='coerce').fillna(0)
+    if not df_plan.empty:
+        df_plan['target'] = pd.to_numeric(df_plan['target'], errors='coerce').fillna(0)
+
     all_months = sorted(df_plan['month'].unique()) if not df_plan.empty else []
     filter_dash = st.selectbox("Mois pour le rapport", ["Tous"] + all_months, key="dash_filter")
     if filter_dash != "Tous":
@@ -97,7 +102,10 @@ with tab4:
         df_logs = df_logs[df_logs['date'].str.contains(filter_dash)]
 
     df_compare = pd.merge(df_plan.groupby('ref')['target'].sum().reset_index(), df_logs.groupby('ref')['qty'].sum().reset_index(), on='ref', how='outer').fillna(0)
-    df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'] * 100).replace([float('inf'), -float('inf')], 0)
+    
+    # حساب النسبة المئوية مع تجنب القسمة على صفر
+    df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'].replace(0, 1) * 100)
+    df_compare.loc[df_compare['target'] == 0, 'Taux (%)'] = 0
 
     st.dataframe(df_compare.style.background_gradient(subset=['Taux (%)'], cmap='RdYlGn'), column_config={"Taux (%)": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True)
     
