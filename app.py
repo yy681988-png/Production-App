@@ -16,12 +16,16 @@ sheet = client.open_by_key("17y_KBs5xQqTY_63UtMC22Sxru7X9jxhg86LvM1WL9us")
 
 @st.cache_data(ttl=60)
 def get_df(sheet_name):
-    data = sheet.worksheet(sheet_name).get_all_records()
-    df = pd.DataFrame(data)
+    worksheet = sheet.worksheet(sheet_name)
+    data = worksheet.get_all_values()
+    if not data: return pd.DataFrame()
     
-    # التعديل لضمان قراءة الـ ref كـ نص نظيف بدون .0
+    # تحويل البيانات إلى DataFrame مع التعامل مع العناوين في الصف الأول
+    df = pd.DataFrame(data[1:], columns=data[0])
+    
+    # معالجة عمود ref لضمان بقائه نصاً نظيفاً (بدون فاصلة علوية أو أصفار محذوفة)
     if 'ref' in df.columns:
-        df['ref'] = df['ref'].astype(str).str.replace(r'\.0$', '', regex=True)
+        df['ref'] = df['ref'].astype(str).str.replace("'", "", regex=False)
     return df
 
 def save_to_sheet(sheet_name, df):
@@ -48,7 +52,8 @@ with tab1:
     name_p = c2.text_input("Nom", key="p_name")
     if st.button("Ajouter Produit"):
         df = get_df("products")
-        df = pd.concat([df, pd.DataFrame({'ref': [ref_p], 'name': [name_p]})], ignore_index=True).drop_duplicates(subset='ref', keep='last')
+        new_row = pd.DataFrame({'ref': [ref_p], 'name': [name_p]})
+        df = pd.concat([df, new_row], ignore_index=True).drop_duplicates(subset='ref', keep='last')
         save_to_sheet("products", df)
         st.rerun()
     st.dataframe(get_df("products"))
@@ -67,7 +72,8 @@ with tab2:
     price = p.number_input("Price", value=0, key="plan_p")
     if st.button("Ajouter Plan"):
         df = get_df("monthly_plan")
-        df = pd.concat([df, pd.DataFrame({'month':[month], 'ref':[ref], 'target':[target], 'price':[price]})], ignore_index=True)
+        new_row = pd.DataFrame({'month':[month], 'ref':[ref], 'target':[float(target)], 'price':[float(price)]})
+        df = pd.concat([df, new_row], ignore_index=True)
         save_to_sheet("monthly_plan", df)
         st.rerun()
     st.dataframe(get_df("monthly_plan"))
@@ -85,7 +91,8 @@ with tab3:
     qty = q.number_input("Qty", value=0, key="log_q")
     if st.button("Ajouter Log"):
         df = get_df("production_logs")
-        df = pd.concat([df, pd.DataFrame({'date':[str(date)], 'ref':[ref], 'qty':[qty]})], ignore_index=True)
+        new_row = pd.DataFrame({'date':[str(date)], 'ref':[ref], 'qty':[float(qty)]})
+        df = pd.concat([df, new_row], ignore_index=True)
         save_to_sheet("production_logs", df)
         st.rerun()
     st.dataframe(get_df("production_logs"))
@@ -106,8 +113,12 @@ with tab4:
             df_logs = df_logs[df_logs['ref'].isin(ref_search)]
             df_plan = df_plan[df_plan['ref'].isin(ref_search)]
         
+        # تحويل الأعمدة الرقمية لضمان الحسابات
+        df_logs['qty'] = pd.to_numeric(df_logs['qty'])
+        df_plan['target'] = pd.to_numeric(df_plan['target'])
+        
         total_prod = df_logs['qty'].sum()
-        total_target = df_plan['target'].sum() if not df_plan.empty and 'target' in df_plan.columns else 0
+        total_target = df_plan['target'].sum() if not df_plan.empty else 0
         completion = (total_prod / total_target * 100) if total_target > 0 else 0
         
         c1, c2, c3 = st.columns(3)
