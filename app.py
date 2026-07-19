@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import plotly.express as px
 
-# إعداد الاتصال بـ Google Sheets
+# إعداد الاتصال
 def get_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds_dict = st.secrets["gcp_service_account"]
@@ -11,8 +12,6 @@ def get_client():
     return gspread.authorize(creds)
 
 client = get_client()
-
-# فتح الملف باستخدام الـ ID الخاص بك مباشرة
 sheet = client.open_by_key("17y_KBs5xQqTY_63UtMC22Sxru7X9jxhg86LvM1WL9us")
 
 def get_df(sheet_name):
@@ -23,52 +22,61 @@ def get_df(sheet_name):
 def save_to_sheet(sheet_name, df):
     worksheet = sheet.worksheet(sheet_name)
     worksheet.clear()
-    # إضافة العناوين ثم البيانات
     worksheet.update([df.columns.values.tolist()] + df.values.tolist())
 
+# وظيفة تحميل البيانات إكسل
+def download_excel(df, filename):
+    output = io.BytesIO()
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    df.to_excel(writer, index=False)
+    writer.close()
+    return output.getvalue()
+
 st.set_page_config(layout="wide")
-st.title("Gestion de Production (Cloud)")
+st.title("Gestion de Production (Cloud Version)")
 
-tab1, tab2, tab3 = st.tabs(["Produits", "Plan", "Saisie"])
+tab1, tab2, tab3, tab4 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard"])
 
+# 1. المنتجات مع الحذف
 with tab1:
     st.header("Gestion des Produits")
-    ref = st.text_input("Reference", key="ref_prod")
-    name = st.text_input("Nom du produit", key="name_prod")
+    ref = st.text_input("Reference")
+    name = st.text_input("Nom du produit")
     if st.button("Ajouter Produit"):
         df = get_df("products")
         new_row = pd.DataFrame({'ref': [ref], 'name': [name]})
         df = pd.concat([df, new_row], ignore_index=True).drop_duplicates(subset='ref', keep='last')
         save_to_sheet("products", df)
-        st.success("Produit ajouté!")
-    st.dataframe(get_df("products"))
+    
+    df_prod = get_df("products")
+    st.dataframe(df_prod)
+    if st.button("Supprimer Produit"):
+        df_prod = df_prod[df_prod['ref'] != ref]
+        save_to_sheet("products", df_prod)
 
+# 2. الخطة مع الحذف
 with tab2:
     st.header("Plan Mensuel")
-    df_prod = get_df("products")
-    month = st.text_input("Mois (ex: 2026-07)")
-    # استخدام قائمة المراجع الموجودة في ورقة المنتجات
-    ref_list = df_prod['ref'].tolist() if not df_prod.empty else []
-    selected_ref = st.selectbox("Choisir le produit", ref_list)
-    target = st.number_input("Quantite prevue", min_value=0)
-    price = st.number_input("Prix total", min_value=0.0)
-    if st.button("Valider le Plan"):
-        df = get_df("monthly_plan")
-        new_row = pd.DataFrame({'month': [month], 'ref': [selected_ref], 'target': [target], 'price': [price]})
-        df = pd.concat([df, new_row], ignore_index=True)
-        save_to_sheet("monthly_plan", df)
-        st.success("Plan mis à jour!")
-    st.dataframe(get_df("monthly_plan"))
+    df_plan = get_df("monthly_plan")
+    st.dataframe(df_plan)
+    if st.button("Supprimer Plan"):
+        save_to_sheet("monthly_plan", pd.DataFrame(columns=['month', 'ref', 'target', 'price']))
 
+# 3. السجلات مع التحميل وإكسل
 with tab3:
     st.header("Saisie de Production")
-    date = st.date_input("Date")
-    ref_prod = st.selectbox("Reference", ref_list)
-    qty = st.number_input("Quantite produite", min_value=0)
-    if st.button("Enregistrer"):
-        df = get_df("production_logs")
-        new_row = pd.DataFrame({'date': [str(date)], 'ref': [ref_prod], 'qty': [qty]})
-        df = pd.concat([df, new_row], ignore_index=True)
-        save_to_sheet("production_logs", df)
-        st.success("Enregistré!")
-    st.dataframe(get_df("production_logs"))
+    df_logs = get_df("production_logs")
+    st.dataframe(df_logs)
+    
+    # زر تحميل إكسل
+    import io
+    st.download_button("Télécharger Excel", download_excel(df_logs, "logs.xlsx"), "logs.xlsx", "application/vnd.ms-excel")
+
+# 4. الداشبورد
+with tab4:
+    st.header("Tableau de Bord")
+    df_logs = get_df("production_logs")
+    if not df_logs.empty:
+        df_logs['qty'] = pd.to_numeric(df_logs['qty'])
+        fig = px.bar(df_logs, x='ref', y='qty', title="Production par produit")
+        st.plotly_chart(fig)
