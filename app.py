@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import plotly.express as px
+import datetime
 
 # إعداد الاتصال
 def get_client():
@@ -19,11 +20,7 @@ def get_df(sheet_name):
     worksheet = sheet.worksheet(sheet_name)
     data = worksheet.get_all_values()
     if not data: return pd.DataFrame()
-    
-    # تحويل البيانات إلى DataFrame مع التعامل مع العناوين في الصف الأول
     df = pd.DataFrame(data[1:], columns=data[0])
-    
-    # معالجة عمود ref لضمان بقائه نصاً نظيفاً (بدون فاصلة علوية أو أصفار محذوفة)
     if 'ref' in df.columns:
         df['ref'] = df['ref'].astype(str).str.replace("'", "", regex=False)
     return df
@@ -37,7 +34,6 @@ def save_to_sheet(sheet_name, df):
 st.set_page_config(layout="wide")
 st.title("Gestion de Production Pro")
 
-# زر التحديث العام
 if st.sidebar.button("Actualiser les données (Refresh)"):
     st.cache_data.clear()
     st.rerun()
@@ -57,38 +53,39 @@ with tab1:
         save_to_sheet("products", df)
         st.rerun()
     st.dataframe(get_df("products"))
-    del_p = st.selectbox("Choisir Ref à supprimer", get_df("products")['ref'].tolist() if not get_df("products").empty else [], key="del_prod")
-    if st.button("Supprimer Produit"):
-        save_to_sheet("products", get_df("products")[get_df("products")['ref'] != del_p])
-        st.rerun()
 
 # 2. الخطة الشهرية
 with tab2:
     st.header("Plan Mensuel")
+    df_prods = get_df("products")
+    product_list = df_prods['ref'].tolist() if not df_prods.empty else []
+    
     m, r, t, p = st.columns(4)
-    month = m.text_input("Mois", key="plan_m")
-    ref = r.text_input("Ref", key="plan_r")
+    sel_date = m.date_input("Mois", value=datetime.date.today())
+    month_val = sel_date.strftime("%Y-%m")
+    ref = r.selectbox("Ref", options=product_list, key="plan_r")
     target = t.number_input("Target", value=0, key="plan_t")
     price = p.number_input("Price", value=0, key="plan_p")
+    
     if st.button("Ajouter Plan"):
         df = get_df("monthly_plan")
-        new_row = pd.DataFrame({'month':[month], 'ref':[ref], 'target':[float(target)], 'price':[float(price)]})
+        new_row = pd.DataFrame({'month':[month_val], 'ref':[ref], 'target':[float(target)], 'price':[float(price)]})
         df = pd.concat([df, new_row], ignore_index=True)
         save_to_sheet("monthly_plan", df)
         st.rerun()
     st.dataframe(get_df("monthly_plan"))
-    idx = st.number_input("Indice ligne à supprimer (Plan)", min_value=0, step=1, key="plan_del")
-    if st.button("Supprimer ligne Plan"):
-        save_to_sheet("monthly_plan", get_df("monthly_plan").drop(idx))
-        st.rerun()
 
 # 3. السجلات
 with tab3:
     st.header("Saisie de Production")
+    df_prods = get_df("products")
+    product_list = df_prods['ref'].tolist() if not df_prods.empty else []
+    
     d, r, q = st.columns(3)
     date = d.date_input("Date", key="log_d")
-    ref = r.text_input("Ref", key="log_r")
+    ref = r.selectbox("Ref", options=product_list, key="log_r")
     qty = q.number_input("Qty", value=0, key="log_q")
+    
     if st.button("Ajouter Log"):
         df = get_df("production_logs")
         new_row = pd.DataFrame({'date':[str(date)], 'ref':[ref], 'qty':[float(qty)]})
@@ -96,10 +93,6 @@ with tab3:
         save_to_sheet("production_logs", df)
         st.rerun()
     st.dataframe(get_df("production_logs"))
-    idx_l = st.number_input("Indice ligne à supprimer (Log)", min_value=0, step=1, key="log_del")
-    if st.button("Supprimer ligne Log"):
-        save_to_sheet("production_logs", get_df("production_logs").drop(idx_l))
-        st.rerun()
 
 # 4. الداشبورد
 with tab4:
@@ -113,7 +106,6 @@ with tab4:
             df_logs = df_logs[df_logs['ref'].isin(ref_search)]
             df_plan = df_plan[df_plan['ref'].isin(ref_search)]
         
-        # تحويل الأعمدة الرقمية لضمان الحسابات
         df_logs['qty'] = pd.to_numeric(df_logs['qty'])
         df_plan['target'] = pd.to_numeric(df_plan['target'])
         
