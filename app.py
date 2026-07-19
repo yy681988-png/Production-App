@@ -16,9 +16,12 @@ sheet = client.open_by_key("17y_KBs5xQqTY_63UtMC22Sxru7X9jxhg86LvM1WL9us")
 
 @st.cache_data(ttl=60)
 def get_df(sheet_name):
-    df = pd.DataFrame(sheet.worksheet(sheet_name).get_all_records())
+    data = sheet.worksheet(sheet_name).get_all_records()
+    df = pd.DataFrame(data)
+    
+    # التعديل لضمان قراءة الـ ref كـ نص نظيف بدون .0
     if 'ref' in df.columns:
-        df['ref'] = df['ref'].astype(str)
+        df['ref'] = df['ref'].astype(str).str.replace(r'\.0$', '', regex=True)
     return df
 
 def save_to_sheet(sheet_name, df):
@@ -30,7 +33,7 @@ def save_to_sheet(sheet_name, df):
 st.set_page_config(layout="wide")
 st.title("Gestion de Production Pro")
 
-# إضافة زر تحديث عام في الشريط الجانبي
+# زر التحديث العام
 if st.sidebar.button("Actualiser les données (Refresh)"):
     st.cache_data.clear()
     st.rerun()
