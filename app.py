@@ -53,6 +53,10 @@ with tab1:
         save_to_sheet("products", df)
         st.rerun()
     st.dataframe(get_df("products"))
+    del_p = st.selectbox("Choisir Ref à supprimer", get_df("products")['ref'].tolist() if not get_df("products").empty else [], key="del_prod")
+    if st.button("Supprimer Produit"):
+        save_to_sheet("products", get_df("products")[get_df("products")['ref'] != del_p])
+        st.rerun()
 
 # 2. الخطة الشهرية
 with tab2:
@@ -74,6 +78,10 @@ with tab2:
         save_to_sheet("monthly_plan", df)
         st.rerun()
     st.dataframe(get_df("monthly_plan"))
+    idx = st.number_input("Indice ligne à supprimer (Plan)", min_value=0, step=1, key="plan_del")
+    if st.button("Supprimer ligne Plan"):
+        save_to_sheet("monthly_plan", get_df("monthly_plan").drop(idx))
+        st.rerun()
 
 # 3. السجلات
 with tab3:
@@ -93,6 +101,10 @@ with tab3:
         save_to_sheet("production_logs", df)
         st.rerun()
     st.dataframe(get_df("production_logs"))
+    idx_l = st.number_input("Indice ligne à supprimer (Log)", min_value=0, step=1, key="log_del")
+    if st.button("Supprimer ligne Log"):
+        save_to_sheet("production_logs", get_df("production_logs").drop(idx_l))
+        st.rerun()
 
 # 4. الداشبورد
 with tab4:
