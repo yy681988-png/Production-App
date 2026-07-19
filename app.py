@@ -16,7 +16,11 @@ sheet = client.open_by_key("17y_KBs5xQqTY_63UtMC22Sxru7X9jxhg86LvM1WL9us")
 
 @st.cache_data(ttl=60)
 def get_df(sheet_name):
-    return pd.DataFrame(sheet.worksheet(sheet_name).get_all_records())
+    df = pd.DataFrame(sheet.worksheet(sheet_name).get_all_records())
+    # تعديل لقراءة الـ ref كنص دائمًا للحفاظ على الأصفار
+    if 'ref' in df.columns:
+        df['ref'] = df['ref'].astype(str)
+    return df
 
 def save_to_sheet(sheet_name, df):
     worksheet = sheet.worksheet(sheet_name)
