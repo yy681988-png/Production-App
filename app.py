@@ -17,7 +17,6 @@ sheet = client.open_by_key("17y_KBs5xQqTY_63UtMC22Sxru7X9jxhg86LvM1WL9us")
 @st.cache_data(ttl=60)
 def get_df(sheet_name):
     df = pd.DataFrame(sheet.worksheet(sheet_name).get_all_records())
-    # تعديل لقراءة الـ ref كنص دائمًا للحفاظ على الأصفار
     if 'ref' in df.columns:
         df['ref'] = df['ref'].astype(str)
     return df
@@ -30,6 +29,11 @@ def save_to_sheet(sheet_name, df):
 
 st.set_page_config(layout="wide")
 st.title("Gestion de Production Pro")
+
+# إضافة زر تحديث عام في الشريط الجانبي
+if st.sidebar.button("Actualiser les données (Refresh)"):
+    st.cache_data.clear()
+    st.rerun()
 
 tab1, tab2, tab3, tab4 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard"])
 
