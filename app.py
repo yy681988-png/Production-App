@@ -106,7 +106,7 @@ with tab3:
         save_to_sheet("production_logs", get_df("production_logs").drop(idx_l))
         st.rerun()
 
-# 4. الداشبورد المقارن
+# 4. الداشبورد الاحترافي
 with tab4:
     st.header("Tableau de Bord Comparatif")
     df_logs = get_df("production_logs")
@@ -142,4 +142,17 @@ with tab4:
         },
         use_container_width=True
     )
-    st.plotly_chart(px.bar(df_compare, x='ref', y=['target', 'qty'], barmode='group', title="Comparaison Target vs Réel"))
+    
+    # الرسم البياني الاحترافي
+    fig = px.bar(
+        df_compare, 
+        x='ref', 
+        y=['target', 'qty'], 
+        barmode='group',
+        title="Performance par Référence",
+        text_auto='.2s',
+        color_discrete_map={"target": "#3498db", "qty": "#2ecc71"}
+    )
+    fig.update_xaxes(type='category')
+    fig.update_layout(template="plotly_dark", legend_title="Indicateur")
+    st.plotly_chart(fig, use_container_width=True)
