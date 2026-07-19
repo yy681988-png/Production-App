@@ -34,34 +34,34 @@ tab1, tab2, tab3, tab4 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard"])
 with tab1:
     st.header("Gestion des Produits")
     c1, c2 = st.columns(2)
-    ref = c1.text_input("Référence")
-    name = c2.text_input("Nom")
+    ref_p = c1.text_input("Référence", key="p_ref")
+    name_p = c2.text_input("Nom", key="p_name")
     if st.button("Ajouter Produit"):
         df = get_df("products")
-        df = pd.concat([df, pd.DataFrame({'ref': [ref], 'name': [name]})], ignore_index=True).drop_duplicates(subset='ref', keep='last')
+        df = pd.concat([df, pd.DataFrame({'ref': [ref_p], 'name': [name_p]})], ignore_index=True).drop_duplicates(subset='ref', keep='last')
         save_to_sheet("products", df)
         st.rerun()
     st.dataframe(get_df("products"))
     if st.button("Supprimer Produit"):
         df = get_df("products")
-        save_to_sheet("products", df[df['ref'] != ref])
+        save_to_sheet("products", df[df['ref'] != ref_p])
         st.rerun()
 
 # تبويب الخطة
 with tab2:
     st.header("Plan Mensuel")
     m, r, t, p = st.columns(4)
-    month = m.text_input("Mois")
-    ref = r.text_input("Ref")
-    target = t.number_input("Target", value=0)
-    price = p.number_input("Price", value=0)
+    month = m.text_input("Mois", key="plan_m")
+    ref = r.text_input("Ref", key="plan_r")
+    target = t.number_input("Target", value=0, key="plan_t")
+    price = p.number_input("Price", value=0, key="plan_p")
     if st.button("Ajouter Plan"):
         df = get_df("monthly_plan")
         df = pd.concat([df, pd.DataFrame({'month':[month], 'ref':[ref], 'target':[target], 'price':[price]})], ignore_index=True)
         save_to_sheet("monthly_plan", df)
         st.rerun()
     st.dataframe(get_df("monthly_plan"))
-    idx = st.number_input("Indice ligne à supprimer (Plan)", min_value=0, step=1)
+    idx = st.number_input("Indice ligne à supprimer (Plan)", min_value=0, step=1, key="plan_del")
     if st.button("Supprimer ligne Plan"):
         save_to_sheet("monthly_plan", get_df("monthly_plan").drop(idx))
         st.rerun()
@@ -70,16 +70,16 @@ with tab2:
 with tab3:
     st.header("Saisie de Production")
     d, r, q = st.columns(3)
-    date = d.date_input("Date")
-    ref = r.text_input("Ref")
-    qty = q.number_input("Qty", value=0)
+    date = d.date_input("Date", key="log_d")
+    ref = r.text_input("Ref", key="log_r")
+    qty = q.number_input("Qty", value=0, key="log_q")
     if st.button("Ajouter Log"):
         df = get_df("production_logs")
         df = pd.concat([df, pd.DataFrame({'date':[str(date)], 'ref':[ref], 'qty':[qty]})], ignore_index=True)
         save_to_sheet("production_logs", df)
         st.rerun()
     st.dataframe(get_df("production_logs"))
-    idx_log = st.number_input("Indice ligne à supprimer (Log)", min_value=0, step=1)
+    idx_log = st.number_input("Indice ligne à supprimer (Log)", min_value=0, step=1, key="log_del")
     if st.button("Supprimer ligne Log"):
         save_to_sheet("production_logs", get_df("production_logs").drop(idx_log))
         st.rerun()
@@ -89,9 +89,8 @@ with tab4:
     st.header("Tableau de Bord")
     df = get_df("production_logs")
     if not df.empty:
-        search = st.text_input("Rechercher par Ref")
+        search = st.text_input("Rechercher par Ref", key="dash_search")
         if search: df = df[df['ref'].str.contains(search)]
-        
         col1, col2 = st.columns(2)
         col1.metric("Production Totale", df['qty'].sum())
         col2.plotly_chart(px.pie(df, values='qty', names='ref', title="Répartition (%)"))
