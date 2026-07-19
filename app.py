@@ -112,14 +112,17 @@ with tab4:
     df_logs = get_df("production_logs")
     df_plan = get_df("monthly_plan")
     
-    if not df_logs.empty: df_logs['qty'] = pd.to_numeric(df_logs['qty'])
-    if not df_plan.empty: df_plan['target'] = pd.to_numeric(df_plan['target'])
+    if not df_logs.empty: df_logs['qty'] = pd.to_numeric(df_logs['qty'], errors='coerce').fillna(0)
+    if not df_plan.empty: df_plan['target'] = pd.to_numeric(df_plan['target'], errors='coerce').fillna(0)
 
     prod_grouped = df_logs.groupby('ref')['qty'].sum().reset_index()
     plan_grouped = df_plan.groupby('ref')['target'].sum().reset_index()
     
     df_compare = pd.merge(plan_grouped, prod_grouped, on='ref', how='outer').fillna(0)
-    df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'] * 100).replace([float('inf'), -float('inf')], 0)
+    
+    # تصحيح عملية القسمة لتجنب ZeroDivisionError
+    df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'].replace(0, 1) * 100)
+    df_compare.loc[df_compare['target'] == 0, 'Taux (%)'] = 0
 
     ref_search = st.multiselect("Filtrer par Ref", df_compare['ref'].unique(), key="dash_search")
     if ref_search:
@@ -128,7 +131,10 @@ with tab4:
     c1, c2, c3 = st.columns(3)
     c1.metric("Objectif Total", int(df_compare['target'].sum()))
     c2.metric("Production Totale", int(df_compare['qty'].sum()))
-    total_perc = (df_compare['qty'].sum() / df_compare['target'].sum() * 100) if df_compare['target'].sum() > 0 else 0
+    
+    total_target = df_compare['target'].sum()
+    total_qty = df_compare['qty'].sum()
+    total_perc = (total_qty / (total_target if total_target > 0 else 1) * 100) if total_target > 0 else 0
     c3.metric("Performance Globale", f"{total_perc:.1f}%")
 
     st.divider()
@@ -143,7 +149,6 @@ with tab4:
         use_container_width=True
     )
     
-    # الرسم البياني الاحترافي
     fig = px.bar(
         df_compare, 
         x='ref', 
