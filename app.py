@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import plotly.express as px
 import datetime
 import io
 import google.generativeai as genai
@@ -38,7 +37,7 @@ st.title("Gestion de Production Pro")
 
 tab1, tab2, tab3, tab4 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard"])
 
-# 1. المنتجات
+# 1. المنتجات + الحذف
 with tab1:
     st.header("Gestion des Produits")
     c1, c2 = st.columns(2)
@@ -50,7 +49,14 @@ with tab1:
         df = pd.concat([df, new_row], ignore_index=True).drop_duplicates(subset='ref', keep='last')
         save_to_sheet("products", df)
         st.rerun()
-    st.dataframe(get_df("products"))
+    
+    df_prod = get_df("products")
+    st.dataframe(df_prod)
+    del_ref = st.selectbox("Sélectionner la référence à supprimer", df_prod['ref'].tolist() if not df_prod.empty else [])
+    if st.button("Supprimer Produit"):
+        df = df_prod[df_prod['ref'] != del_ref]
+        save_to_sheet("products", df)
+        st.rerun()
 
 # 2. الخطة الشهرية
 with tab2:
@@ -70,7 +76,7 @@ with tab2:
             save_to_sheet("monthly_plan", pd.concat([df, new_row], ignore_index=True))
             st.rerun()
 
-# 3. السجلات
+# 3. السجلات + الحذف
 with tab3:
     st.header("Saisie de Production")
     d, r, q = st.columns(3)
@@ -81,19 +87,23 @@ with tab3:
         df = get_df("production_logs")
         save_to_sheet("production_logs", pd.concat([df, pd.DataFrame({'date':[str(date)], 'ref':[ref], 'qty':[float(qty)]})], ignore_index=True))
         st.rerun()
-    st.dataframe(get_df("production_logs"))
+    
+    df_logs = get_df("production_logs")
+    st.dataframe(df_logs)
+    if st.button("Supprimer la dernière ligne"):
+        df = df_logs.iloc[:-1]
+        save_to_sheet("production_logs", df)
+        st.rerun()
 
-# 4. الداشبورد المصحح (لحل خطأ ArrowTypeError)
+# 4. الداشبورد + التحليل الذكي
 with tab4:
-    st.header("Tableau de Bord Comparatif")
+    st.header("Tableau de Bord")
     df_logs = get_df("production_logs")
     df_plan = get_df("monthly_plan")
     
-    # تحويل البيانات إلى أرقام بشكل صريح لمنع الأخطاء
-    if not df_logs.empty:
-        df_logs['qty'] = pd.to_numeric(df_logs['qty'], errors='coerce').fillna(0)
-    if not df_plan.empty:
-        df_plan['target'] = pd.to_numeric(df_plan['target'], errors='coerce').fillna(0)
+    # تحويل آمن للأرقام لتفادي ArrowTypeError
+    if not df_logs.empty: df_logs['qty'] = pd.to_numeric(df_logs['qty'], errors='coerce').fillna(0)
+    if not df_plan.empty: df_plan['target'] = pd.to_numeric(df_plan['target'], errors='coerce').fillna(0)
 
     all_months = sorted(df_plan['month'].unique()) if not df_plan.empty else []
     filter_dash = st.selectbox("Mois pour le rapport", ["Tous"] + all_months, key="dash_filter")
@@ -102,22 +112,24 @@ with tab4:
         df_logs = df_logs[df_logs['date'].str.contains(filter_dash)]
 
     df_compare = pd.merge(df_plan.groupby('ref')['target'].sum().reset_index(), df_logs.groupby('ref')['qty'].sum().reset_index(), on='ref', how='outer').fillna(0)
-    
-    # حساب النسبة المئوية مع تجنب القسمة على صفر
     df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'].replace(0, 1) * 100)
     df_compare.loc[df_compare['target'] == 0, 'Taux (%)'] = 0
 
-    st.dataframe(df_compare.style.background_gradient(subset=['Taux (%)'], cmap='RdYlGn'), column_config={"Taux (%)": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True)
+    st.dataframe(df_compare.style.background_gradient(subset=['Taux (%)'], cmap='RdYlGn'), use_container_width=True)
     
     # تصدير Excel
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer: df_compare.to_excel(writer, index=False)
     st.download_button("📥 Télécharger Rapport (Excel)", data=output.getvalue(), file_name="Rapport.xlsx")
 
-    # تحليل الذكاء الاصطناعي
+    # تحليل AI آمن
     st.subheader("🤖 Analyse AI")
     if st.button("Analyser avec AI"):
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(f"Analyse ces données de production : {df_compare.to_string()}")
-        st.write(response.text)
+        api_key = st.secrets.get("gemini_api_key") # استخدام الحروف الصغيرة كما اتفقتما
+        if api_key:
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(f"Analyse ces données de production : {df_compare.to_string()}")
+            st.write(response.text)
+        else:
+            st.warning("⚠️ المفتاح 'gemini_api_key' غير موجود في الـ Secrets. تأكد من إضافته في إعدادات التطبيق.")
