@@ -30,52 +30,68 @@ st.title("Gestion de Production Pro")
 
 tab1, tab2, tab3, tab4 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard"])
 
+# تبويب المنتجات
 with tab1:
     st.header("Gestion des Produits")
-    ref = st.text_input("Référence")
-    name = st.text_input("Nom")
+    c1, c2 = st.columns(2)
+    ref = c1.text_input("Référence")
+    name = c2.text_input("Nom")
     if st.button("Ajouter Produit"):
         df = get_df("products")
         df = pd.concat([df, pd.DataFrame({'ref': [ref], 'name': [name]})], ignore_index=True).drop_duplicates(subset='ref', keep='last')
         save_to_sheet("products", df)
         st.rerun()
     st.dataframe(get_df("products"))
+    if st.button("Supprimer Produit"):
+        df = get_df("products")
+        save_to_sheet("products", df[df['ref'] != ref])
+        st.rerun()
 
+# تبويب الخطة
 with tab2:
     st.header("Plan Mensuel")
-    df_plan = get_df("monthly_plan")
-    selected_row = st.selectbox("Choisir ligne à supprimer", df_plan.index)
-    if st.button("Supprimer Plan"):
-        save_to_sheet("monthly_plan", df_plan.drop(selected_row))
+    m, r, t, p = st.columns(4)
+    month = m.text_input("Mois")
+    ref = r.text_input("Ref")
+    target = t.number_input("Target", value=0)
+    price = p.number_input("Price", value=0)
+    if st.button("Ajouter Plan"):
+        df = get_df("monthly_plan")
+        df = pd.concat([df, pd.DataFrame({'month':[month], 'ref':[ref], 'target':[target], 'price':[price]})], ignore_index=True)
+        save_to_sheet("monthly_plan", df)
         st.rerun()
-    st.dataframe(df_plan)
+    st.dataframe(get_df("monthly_plan"))
+    idx = st.number_input("Indice ligne à supprimer (Plan)", min_value=0, step=1)
+    if st.button("Supprimer ligne Plan"):
+        save_to_sheet("monthly_plan", get_df("monthly_plan").drop(idx))
+        st.rerun()
 
+# تبويب السجلات
 with tab3:
     st.header("Saisie de Production")
-    df_logs = get_df("production_logs")
-    selected_log = st.selectbox("Choisir ligne à supprimer", df_logs.index)
-    if st.button("Supprimer Log"):
-        save_to_sheet("production_logs", df_logs.drop(selected_log))
+    d, r, q = st.columns(3)
+    date = d.date_input("Date")
+    ref = r.text_input("Ref")
+    qty = q.number_input("Qty", value=0)
+    if st.button("Ajouter Log"):
+        df = get_df("production_logs")
+        df = pd.concat([df, pd.DataFrame({'date':[str(date)], 'ref':[ref], 'qty':[qty]})], ignore_index=True)
+        save_to_sheet("production_logs", df)
         st.rerun()
-    st.dataframe(df_logs)
+    st.dataframe(get_df("production_logs"))
+    idx_log = st.number_input("Indice ligne à supprimer (Log)", min_value=0, step=1)
+    if st.button("Supprimer ligne Log"):
+        save_to_sheet("production_logs", get_df("production_logs").drop(idx_log))
+        st.rerun()
 
+# تبويب الداشبورد
 with tab4:
     st.header("Tableau de Bord")
     df = get_df("production_logs")
     if not df.empty:
-        # البحث
-        search = st.text_input("Rechercher (Référence)")
+        search = st.text_input("Rechercher par Ref")
         if search: df = df[df['ref'].str.contains(search)]
         
-        # مؤشرات
         col1, col2 = st.columns(2)
         col1.metric("Production Totale", df['qty'].sum())
-        col2.metric("Nombre de lots", len(df))
-        
-        # رسوم بيانية
-        c1, c2 = st.columns(2)
-        fig_bar = px.bar(df, x='ref', y='qty', title="Production par Référence")
-        c1.plotly_chart(fig_bar, use_container_width=True)
-        
-        fig_pie = px.pie(df, values='qty', names='ref', title="Répartition (%)")
-        c2.plotly_chart(fig_pie, use_container_width=True)
+        col2.plotly_chart(px.pie(df, values='qty', names='ref', title="Répartition (%)"))
