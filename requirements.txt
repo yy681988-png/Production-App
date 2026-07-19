@@ -6,3 +6,4 @@ xlsxwriter
 gspread
 oauth2client
 matplotlib
+google-generativeai
