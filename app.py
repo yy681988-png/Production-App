@@ -119,7 +119,7 @@ with tab4:
     plan_grouped = df_plan.groupby('ref')['target'].sum().reset_index()
     
     df_compare = pd.merge(plan_grouped, prod_grouped, on='ref', how='outer').fillna(0)
-    df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'] * 100).replace([float('inf'), -float('inf')], 0).round(1)
+    df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'] * 100).replace([float('inf'), -float('inf')], 0)
 
     ref_search = st.multiselect("Filtrer par Ref", df_compare['ref'].unique(), key="dash_search")
     if ref_search:
@@ -133,5 +133,13 @@ with tab4:
 
     st.divider()
     st.subheader("Détail par Produit")
-    st.dataframe(df_compare.style.background_gradient(subset=['Taux (%)'], cmap='RdYlGn'), use_container_width=True)
+    st.dataframe(
+        df_compare.style.background_gradient(subset=['Taux (%)'], cmap='RdYlGn'),
+        column_config={
+            "target": st.column_config.NumberColumn("Target", format="%d"),
+            "qty": st.column_config.NumberColumn("Qty", format="%d"),
+            "Taux (%)": st.column_config.NumberColumn("Taux (%)", format="%.2f")
+        },
+        use_container_width=True
+    )
     st.plotly_chart(px.bar(df_compare, x='ref', y=['target', 'qty'], barmode='group', title="Comparaison Target vs Réel"))
