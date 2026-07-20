@@ -11,10 +11,10 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
+    from google import genai
+    GEMINI_AVAILABLE = True
 except ImportError:
-    ANTHROPIC_AVAILABLE = False
+    GEMINI_AVAILABLE = False
 
 SHEET_KEY = "17y_KBs5xQqTY_63UtMC22Sxru7X9jxhg86LvM1WL9us"
 
@@ -238,34 +238,30 @@ def build_data_summary(df_compare):
 
 
 def get_ai_analysis(data_summary):
-    if not ANTHROPIC_AVAILABLE:
-        return None, "Le package 'anthropic' n'est pas installé. Ajoutez-le à requirements.txt."
+    if not GEMINI_AVAILABLE:
+        return None, "Le package 'google-genai' n'est pas installé. Ajoutez-le à requirements.txt."
 
-    api_key = st.secrets.get("ANTHROPIC_API_KEY")
+    api_key = st.secrets.get("GEMINI_API_KEY")
     if not api_key:
-        return None, "Clé ANTHROPIC_API_KEY absente des secrets Streamlit (st.secrets)."
+        return None, "Clé GEMINI_API_KEY absente des secrets Streamlit (st.secrets)."
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=1000,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Tu es un analyste de production industrielle. Voici les données de "
-                    "performance du mois (objectifs vs production réelle) :\n\n"
-                    f"{data_summary}\n\n"
-                    "Rédige une analyse concise en français, structurée avec des puces :\n"
-                    "1) Synthèse générale de la performance\n"
-                    "2) Références en retard à surveiller en priorité\n"
-                    "3) Références en avance / bonnes performances\n"
-                    "4) 2 à 3 recommandations concrètes et actionnables"
-                )
-            }]
+        client = genai.Client(api_key=api_key)
+        prompt = (
+            "Tu es un analyste de production industrielle. Voici les données de "
+            "performance du mois (objectifs vs production réelle) :\n\n"
+            f"{data_summary}\n\n"
+            "Rédige une analyse concise en français, structurée avec des puces :\n"
+            "1) Synthèse générale de la performance\n"
+            "2) Références en retard à surveiller en priorité\n"
+            "3) Références en avance / bonnes performances\n"
+            "4) 2 à 3 recommandations concrètes et actionnables"
         )
-        text = "".join(block.text for block in message.content if block.type == "text")
-        return text, None
+        response = client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=prompt,
+        )
+        return response.text, None
     except Exception as e:
         return None, f"Erreur lors de l'appel à l'IA : {e}"
 
@@ -478,8 +474,8 @@ with tab5:
     st.divider()
     st.subheader("Analyse par Intelligence Artificielle")
     st.caption(
-        "Nécessite le package 'anthropic' dans requirements.txt et une clé "
-        "ANTHROPIC_API_KEY définie dans les secrets Streamlit (st.secrets)."
+        "Nécessite le package 'google-genai' dans requirements.txt et une clé "
+        "GEMINI_API_KEY définie dans les secrets Streamlit (st.secrets)."
     )
 
     if st.button("🤖 Générer une analyse IA"):
