@@ -126,6 +126,47 @@ def safe_drop(df, idx, sheet_name):
         st.error("Index invalide : aucune ligne correspondante trouvée.")
 
 
+def get_monthly_trends(selected_refs=None):
+    """Calcule l'évolution mensuelle Objectif vs Production, en s'appuyant sur
+    la date des logs de production et le mois du plan mensuel."""
+    df_logs = ensure_columns(get_df("production_logs"), ['date', 'ref', 'qty'])
+    df_plan = ensure_columns(get_df("monthly_plan"), ['month', 'ref', 'target', 'price'])
+
+    df_logs['qty'] = pd.to_numeric(df_logs['qty'], errors='coerce').fillna(0)
+    df_plan['target'] = pd.to_numeric(df_plan['target'], errors='coerce').fillna(0)
+
+    if not df_logs.empty:
+        df_logs['date_parsed'] = pd.to_datetime(df_logs['date'], errors='coerce')
+        df_logs['month'] = df_logs['date_parsed'].dt.strftime('%Y-%m')
+
+    if selected_refs:
+        if not df_logs.empty:
+            df_logs = df_logs[df_logs['ref'].isin(selected_refs)]
+        if not df_plan.empty:
+            df_plan = df_plan[df_plan['ref'].isin(selected_refs)]
+
+    if not df_logs.empty and 'month' in df_logs.columns:
+        monthly_actual = df_logs.groupby('month')['qty'].sum().reset_index().rename(columns={'qty': 'Production'})
+    else:
+        monthly_actual = pd.DataFrame(columns=['month', 'Production'])
+
+    if not df_plan.empty:
+        monthly_target = df_plan.groupby('month')['target'].sum().reset_index().rename(columns={'target': 'Objectif'})
+    else:
+        monthly_target = pd.DataFrame(columns=['month', 'Objectif'])
+
+    trends = pd.merge(monthly_target, monthly_actual, on='month', how='outer').fillna(0)
+    if not trends.empty:
+        trends = trends.dropna(subset=['month'])
+        trends = trends.sort_values('month')
+        for col in ['Objectif', 'Production']:
+            trends[col] = pd.to_numeric(trends[col], errors='coerce').fillna(0)
+        trends['Taux (%)'] = (trends['Production'] / trends['Objectif'].replace(0, 1) * 100)
+        trends.loc[trends['Objectif'] == 0, 'Taux (%)'] = 0
+
+    return trends
+
+
 def get_dashboard_data():
     """Calcule les données comparatives (plan vs réalisé) une seule fois,
     réutilisées par l'onglet Dashboard et l'onglet Rapports & IA."""
@@ -273,7 +314,7 @@ if st.sidebar.button("Actualiser les données (Refresh)"):
     st.cache_data.clear()
     st.rerun()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard", "Rapports & IA"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard", "Rapports & IA", "Tendances"])
 
 # ---------------------------------------------------------------------------
 # 1. Produits
@@ -492,3 +533,66 @@ with tab5:
 
     if "ai_analysis" in st.session_state:
         st.markdown(st.session_state["ai_analysis"])
+
+# ---------------------------------------------------------------------------
+# 6. Tendances Historiques
+# ---------------------------------------------------------------------------
+with tab6:
+    st.header("Tendances Historiques")
+    st.caption("Évolution de l'objectif et de la production réalisée, mois par mois.")
+
+    df_products_t = get_df("products")
+    product_list_t = df_products_t['ref'].tolist() if not df_products_t.empty and 'ref' in df_products_t.columns else []
+
+    refs_filter = st.multiselect(
+        "Filtrer par référence (laisser vide = toutes les références)",
+        product_list_t,
+        key="trend_refs"
+    )
+    trends = get_monthly_trends(refs_filter if refs_filter else None)
+
+    if trends.empty:
+        st.info("Pas encore assez de données pour afficher une tendance. Ajoutez des entrées dans 'Plan' et 'Saisie' sur plusieurs mois.")
+    else:
+        fig_trend = px.line(
+            trends,
+            x='month',
+            y=['Objectif', 'Production'],
+            markers=True,
+            title="Évolution Objectif vs Production par mois",
+            color_discrete_map={"Objectif": "#3498db", "Production": "#2ecc71"}
+        )
+        fig_trend.update_layout(
+            template="plotly_dark",
+            legend_title="Indicateur",
+            xaxis_title="Mois",
+            yaxis_title="Quantité"
+        )
+        fig_trend.update_xaxes(type='category')
+        st.plotly_chart(fig_trend, use_container_width=True)
+
+        fig_perf = px.bar(
+            trends,
+            x='month',
+            y='Taux (%)',
+            title="Taux de réalisation par mois (%)",
+            text_auto='.1f',
+            color_discrete_sequence=["#2ecc71"]
+        )
+        fig_perf.update_layout(template="plotly_dark", xaxis_title="Mois", yaxis_title="Taux (%)")
+        fig_perf.update_xaxes(type='category')
+        fig_perf.add_hline(y=100, line_dash="dash", line_color="red", annotation_text="Objectif 100%")
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+        st.subheader("Détail mensuel")
+        st.dataframe(
+            trends,
+            column_config={
+                "month": st.column_config.TextColumn("Mois"),
+                "Objectif": st.column_config.NumberColumn("Objectif", format="%.2f"),
+                "Production": st.column_config.NumberColumn("Production", format="%.2f"),
+                "Taux (%)": st.column_config.NumberColumn("Taux (%)", format="%.2f"),
+            },
+            use_container_width=True,
+            hide_index=True
+        )
