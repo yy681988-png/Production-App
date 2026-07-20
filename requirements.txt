@@ -6,6 +6,5 @@ xlsxwriter
 gspread
 oauth2client
 matplotlib
-google-generativeai
 openpyxl
-anthropic
+google-genai
