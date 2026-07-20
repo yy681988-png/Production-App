@@ -4,6 +4,16 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import plotly.express as px
 import datetime
+import io
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 
 SHEET_KEY = "17y_KBs5xQqTY_63UtMC22Sxru7X9jxhg86LvM1WL9us"
 
@@ -78,6 +88,150 @@ def safe_drop(df, idx, sheet_name):
         st.error("Index invalide : aucune ligne correspondante trouvée.")
 
 
+def get_dashboard_data():
+    """Calcule les données comparatives (plan vs réalisé) une seule fois,
+    réutilisées par l'onglet Dashboard et l'onglet Rapports & IA."""
+    df_products = get_df("products")
+    df_logs = ensure_columns(get_df("production_logs"), ['date', 'ref', 'qty'])
+    df_plan = ensure_columns(get_df("monthly_plan"), ['month', 'ref', 'target', 'price'])
+
+    df_logs['qty'] = pd.to_numeric(df_logs['qty'], errors='coerce').fillna(0)
+    df_plan['target'] = pd.to_numeric(df_plan['target'], errors='coerce').fillna(0)
+    df_plan['price'] = pd.to_numeric(df_plan['price'], errors='coerce').fillna(0)
+
+    prod_grouped = df_logs.groupby('ref')['qty'].sum().reset_index() if not df_logs.empty else pd.DataFrame(columns=['ref', 'qty'])
+    plan_grouped = df_plan.groupby('ref').agg(target=('target', 'sum'), price=('price', 'mean')).reset_index() if not df_plan.empty else pd.DataFrame(columns=['ref', 'target', 'price'])
+
+    df_compare = pd.merge(plan_grouped, prod_grouped, on='ref', how='outer').fillna(0)
+    for col in ['target', 'qty', 'price']:
+        if col in df_compare.columns:
+            df_compare[col] = pd.to_numeric(df_compare[col], errors='coerce').fillna(0)
+
+    if not df_compare.empty:
+        df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'].replace(0, 1) * 100)
+        df_compare.loc[df_compare['target'] == 0, 'Taux (%)'] = 0
+        df_compare['CA réalisé'] = df_compare['qty'] * df_compare['price']
+
+    return df_products, df_plan, df_logs, df_compare
+
+
+# ---------------------------------------------------------------------------
+# Export Excel professionnel
+# ---------------------------------------------------------------------------
+def write_styled_sheet(wb, title, df, numeric_cols=None):
+    ws = wb.create_sheet(title)
+    numeric_cols = numeric_cols or []
+
+    header_font = Font(name="Arial", bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    thin = Side(style="thin", color="B7B7B7")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center")
+
+    if df is None or df.empty:
+        ws.append(["Aucune donnée disponible"])
+        ws["A1"].font = Font(name="Arial", italic=True, color="888888")
+        return ws
+
+    ws.append(list(df.columns))
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+        cell.border = border
+
+    for _, row in df.iterrows():
+        ws.append(list(row))
+
+    for r_idx in range(2, ws.max_row + 1):
+        for c_idx, col_name in enumerate(df.columns, start=1):
+            cell = ws.cell(row=r_idx, column=c_idx)
+            cell.font = Font(name="Arial", size=10)
+            cell.border = border
+            if col_name in numeric_cols:
+                cell.number_format = '#,##0.00'
+                cell.alignment = Alignment(horizontal="right")
+
+    for c_idx, col_name in enumerate(df.columns, start=1):
+        values = [str(col_name)] + [str(v) for v in df[col_name].tolist()]
+        max_len = max(len(v) for v in values)
+        ws.column_dimensions[get_column_letter(c_idx)].width = min(max_len + 4, 40)
+
+    ws.freeze_panes = "A2"
+    return ws
+
+
+def generate_excel_report(df_products, df_plan, df_logs, df_compare):
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    write_styled_sheet(wb, "Produits", df_products)
+    write_styled_sheet(wb, "Plan Mensuel", df_plan, numeric_cols=["target", "price"])
+    write_styled_sheet(wb, "Production", df_logs, numeric_cols=["qty"])
+    write_styled_sheet(wb, "Dashboard", df_compare, numeric_cols=["target", "qty", "price", "Taux (%)", "CA réalisé"])
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+# ---------------------------------------------------------------------------
+# Analyse par IA (Claude, via l'API Anthropic)
+# ---------------------------------------------------------------------------
+def build_data_summary(df_compare):
+    total_target = df_compare['target'].sum()
+    total_qty = df_compare['qty'].sum()
+    perf = (total_qty / total_target * 100) if total_target > 0 else 0
+
+    lines = [
+        f"Objectif total : {total_target:.0f}",
+        f"Production totale réalisée : {total_qty:.0f}",
+        f"Performance globale : {perf:.1f}%",
+        "",
+        "Détail par référence (ref, objectif, produit, taux %, CA réalisé) :",
+    ]
+    for _, row in df_compare.iterrows():
+        lines.append(
+            f"- {row['ref']} : objectif={row['target']:.0f}, produit={row['qty']:.0f}, "
+            f"taux={row['Taux (%)']:.1f}%, CA={row.get('CA réalisé', 0):.2f}"
+        )
+    return "\n".join(lines)
+
+
+def get_ai_analysis(data_summary):
+    if not ANTHROPIC_AVAILABLE:
+        return None, "Le package 'anthropic' n'est pas installé. Ajoutez-le à requirements.txt."
+
+    api_key = st.secrets.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None, "Clé ANTHROPIC_API_KEY absente des secrets Streamlit (st.secrets)."
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=1000,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Tu es un analyste de production industrielle. Voici les données de "
+                    "performance du mois (objectifs vs production réelle) :\n\n"
+                    f"{data_summary}\n\n"
+                    "Rédige une analyse concise en français, structurée avec des puces :\n"
+                    "1) Synthèse générale de la performance\n"
+                    "2) Références en retard à surveiller en priorité\n"
+                    "3) Références en avance / bonnes performances\n"
+                    "4) 2 à 3 recommandations concrètes et actionnables"
+                )
+            }]
+        )
+        text = "".join(block.text for block in message.content if block.type == "text")
+        return text, None
+    except Exception as e:
+        return None, f"Erreur lors de l'appel à l'IA : {e}"
+
+
 st.set_page_config(layout="wide")
 st.title("Gestion de Production Pro")
 
@@ -85,7 +239,7 @@ if st.sidebar.button("Actualiser les données (Refresh)"):
     st.cache_data.clear()
     st.rerun()
 
-tab1, tab2, tab3, tab4 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Produits", "Plan", "Saisie", "Dashboard", "Rapports & IA"])
 
 # ---------------------------------------------------------------------------
 # 1. Produits
@@ -192,35 +346,11 @@ with tab3:
 # ---------------------------------------------------------------------------
 with tab4:
     st.header("Tableau de Bord Comparatif")
-    df_logs = ensure_columns(get_df("production_logs"), ['date', 'ref', 'qty'])
-    df_plan = ensure_columns(get_df("monthly_plan"), ['month', 'ref', 'target', 'price'])
-
-    df_logs['qty'] = pd.to_numeric(df_logs['qty'], errors='coerce').fillna(0)
-    df_plan['target'] = pd.to_numeric(df_plan['target'], errors='coerce').fillna(0)
-    df_plan['price'] = pd.to_numeric(df_plan['price'], errors='coerce').fillna(0)
-
-    prod_grouped = df_logs.groupby('ref')['qty'].sum().reset_index() if not df_logs.empty else pd.DataFrame(columns=['ref', 'qty'])
-    plan_grouped = df_plan.groupby('ref').agg(target=('target', 'sum'), price=('price', 'mean')).reset_index() if not df_plan.empty else pd.DataFrame(columns=['ref', 'target', 'price'])
-
-    df_compare = pd.merge(plan_grouped, prod_grouped, on='ref', how='outer').fillna(0)
-
-    # Force les types numériques : après un merge/fillna sur des colonnes vides,
-    # pandas peut laisser certaines colonnes en dtype "object", ce qui fait planter
-    # Plotly Express (wide-form data with columns of different type).
-    for col in ['target', 'qty', 'price']:
-        if col in df_compare.columns:
-            df_compare[col] = pd.to_numeric(df_compare[col], errors='coerce').fillna(0)
+    _, _, _, df_compare = get_dashboard_data()
 
     if df_compare.empty:
         st.info("Aucune donnée disponible pour le moment.")
     else:
-        # Taux de réalisation, en évitant la division par zéro
-        df_compare['Taux (%)'] = (df_compare['qty'] / df_compare['target'].replace(0, 1) * 100)
-        df_compare.loc[df_compare['target'] == 0, 'Taux (%)'] = 0
-
-        # Chiffre d'affaires réalisé (qty x price), maintenant que 'price' est exploité
-        df_compare['CA réalisé'] = df_compare['qty'] * df_compare['price']
-
         ref_search = st.multiselect("Filtrer par Ref", df_compare['ref'].unique(), key="dash_search")
         if ref_search:
             df_compare = df_compare[df_compare['ref'].isin(ref_search)]
@@ -239,8 +369,8 @@ with tab4:
         st.dataframe(
             df_compare.style.background_gradient(subset=['Taux (%)'], cmap='RdYlGn'),
             column_config={
-                "target": st.column_config.NumberColumn("Target", format="%d"),
-                "qty": st.column_config.NumberColumn("Qty", format="%d"),
+                "target": st.column_config.NumberColumn("Target", format="%.2f"),
+                "qty": st.column_config.NumberColumn("Qty", format="%.2f"),
                 "Taux (%)": st.column_config.NumberColumn("Taux (%)", format="%.2f"),
                 "CA réalisé": st.column_config.NumberColumn("CA réalisé", format="%.2f"),
             },
@@ -259,3 +389,72 @@ with tab4:
         fig.update_xaxes(type='category')
         fig.update_layout(template="plotly_dark", legend_title="Indicateur")
         st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# 5. Rapports & IA
+# ---------------------------------------------------------------------------
+with tab5:
+    st.header("Rapports & Analyse IA")
+    df_products_r, df_plan_r, df_logs_r, df_compare_r = get_dashboard_data()
+
+    st.subheader("Résumé rapide")
+    if df_compare_r.empty:
+        st.info("Pas encore de données à résumer.")
+    else:
+        total_target = df_compare_r['target'].sum()
+        total_qty = df_compare_r['qty'].sum()
+        perf = (total_qty / total_target * 100) if total_target > 0 else 0
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Objectif Total", f"{total_target:.0f}")
+        c2.metric("Production Totale", f"{total_qty:.0f}")
+        c3.metric("Performance Globale", f"{perf:.1f}%")
+
+        colw, colb = st.columns(2)
+        with colw:
+            st.markdown("**⚠️ Références en retard**")
+            worst = df_compare_r.sort_values("Taux (%)").head(3)
+            st.dataframe(worst[['ref', 'target', 'qty', 'Taux (%)']], use_container_width=True, hide_index=True)
+        with colb:
+            st.markdown("**✅ Meilleures performances**")
+            best = df_compare_r.sort_values("Taux (%)", ascending=False).head(3)
+            st.dataframe(best[['ref', 'target', 'qty', 'Taux (%)']], use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Export Excel")
+    st.caption("Génère un classeur avec 4 feuilles (Produits, Plan Mensuel, Production, Dashboard), mis en forme automatiquement.")
+
+    if st.button("📊 Générer le rapport Excel"):
+        with st.spinner("Génération du fichier Excel..."):
+            excel_buffer = generate_excel_report(df_products_r, df_plan_r, df_logs_r, df_compare_r)
+            st.session_state["excel_report"] = excel_buffer.getvalue()
+
+    if "excel_report" in st.session_state:
+        st.download_button(
+            label="📥 Télécharger le rapport Excel",
+            data=st.session_state["excel_report"],
+            file_name=f"rapport_production_{datetime.date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    st.divider()
+    st.subheader("Analyse par Intelligence Artificielle")
+    st.caption(
+        "Nécessite le package 'anthropic' dans requirements.txt et une clé "
+        "ANTHROPIC_API_KEY définie dans les secrets Streamlit (st.secrets)."
+    )
+
+    if st.button("🤖 Générer une analyse IA"):
+        if df_compare_r.empty:
+            st.warning("Pas assez de données pour générer une analyse.")
+        else:
+            with st.spinner("Analyse en cours..."):
+                summary = build_data_summary(df_compare_r)
+                analysis, error = get_ai_analysis(summary)
+            if error:
+                st.error(error)
+            else:
+                st.session_state["ai_analysis"] = analysis
+
+    if "ai_analysis" in st.session_state:
+        st.markdown(st.session_state["ai_analysis"])
