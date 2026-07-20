@@ -5,6 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import plotly.express as px
 import datetime
 import io
+import time
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -41,11 +42,41 @@ def get_sheet():
 sheet = get_sheet()
 
 
+def retry_on_quota(func, *args, max_retries=4, **kwargs):
+    """Exécute un appel à l'API Google Sheets avec retry + backoff exponentiel
+    en cas d'erreur 429 (quota dépassé)."""
+    delay = 2
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            status = None
+            try:
+                status = e.response.status_code
+            except Exception:
+                pass
+            if status == 429:
+                last_error = e
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
+    raise last_error
+
+
 @st.cache_data(ttl=60)
 def get_df(sheet_name):
     try:
-        worksheet = sheet.worksheet(sheet_name)
-        data = worksheet.get_all_values()
+        worksheet = retry_on_quota(sheet.worksheet, sheet_name)
+        data = retry_on_quota(worksheet.get_all_values)
+    except gspread.exceptions.APIError as e:
+        st.error(
+            f"Quota Google Sheets dépassé pour la feuille '{sheet_name}'. "
+            "Réessayez dans quelques instants, ou augmentez le quota "
+            "'Read requests per minute' dans Google Cloud Console."
+        )
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"Erreur de lecture de la feuille '{sheet_name}' : {e}")
         return pd.DataFrame()
@@ -71,10 +102,17 @@ def ensure_columns(df, columns):
 
 def save_to_sheet(sheet_name, df):
     try:
-        worksheet = sheet.worksheet(sheet_name)
-        worksheet.clear()
-        worksheet.update([df.columns.values.tolist()] + df.values.tolist())
-        st.cache_data.clear()
+        worksheet = retry_on_quota(sheet.worksheet, sheet_name)
+        retry_on_quota(worksheet.clear)
+        retry_on_quota(worksheet.update, [df.columns.values.tolist()] + df.values.tolist())
+        # On ne vide que le cache de CETTE feuille, pas de toutes les feuilles :
+        # évite de forcer une relecture inutile de tout le classeur à chaque écriture.
+        get_df.clear(sheet_name)
+    except gspread.exceptions.APIError as e:
+        st.error(
+            f"Quota Google Sheets dépassé lors de l'enregistrement dans '{sheet_name}'. "
+            "Réessayez dans quelques instants."
+        )
     except Exception as e:
         st.error(f"Erreur lors de l'enregistrement dans '{sheet_name}' : {e}")
 
